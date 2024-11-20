@@ -1,0 +1,214 @@
+Infrastructure as Code (IaC) - Terraform
+
+Write a Terraform template to provision the cloud infrastructure on GCP.
+
+Create a GKE Cluster with appropriate node pools.
+Use a Cloud Storage Bucket for any logs if needed.
+Use IAM roles to ensure proper access for the GKE cluster.
+Key Files:
+
+main.tf: Defines the cluster and required resources.
+provider "google" {
+  project = var.project_id
+  region  = var.region
+}
+
+# Create GKE Cluster
+resource "google_container_cluster" "gke_cluster" {
+  name     = var.cluster_name
+  location = var.region
+
+  node_config {
+    machine_type = var.machine_type
+    disk_size_gb = var.disk_size
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/devstorage.read_write", # For access to Cloud Storage
+      "https://www.googleapis.com/auth/logging.write",         # For logging
+      "https://www.googleapis.com/auth/monitoring"            # For monitoring
+    ]
+  }
+
+  initial_node_count = var.initial_node_count
+  remove_default_node_pool = true
+
+  lifecycle {
+    ignore_changes = [node_pool]
+  }
+}
+
+# Node Pool for Cluster
+resource "google_container_node_pool" "primary_nodes" {
+  cluster    = google_container_cluster.gke_cluster.name
+  location   = google_container_cluster.gke_cluster.location
+  node_count = var.node_pool_count
+
+  node_config {
+    machine_type = var.machine_type
+    disk_size_gb = var.disk_size
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/devstorage.read_write",
+      "https://www.googleapis.com/auth/logging.write",
+      "https://www.googleapis.com/auth/monitoring"
+    ]
+  }
+}
+
+# Create a Cloud Storage Bucket for Logs
+resource "google_storage_bucket" "logs_bucket" {
+  name          = "${var.project_id}-gke-logs"
+  location      = var.region
+  storage_class = "STANDARD"
+
+  lifecycle_rule {
+    action {
+      type = "Delete"
+    }
+    condition {
+      age = 30
+    }
+  }
+}
+
+# IAM roles for Cluster Access
+resource "google_project_iam_member" "gke_admin" {
+  project = var.project_id
+  role    = "roles/container.admin"
+  member  = "serviceAccount:${google_container_cluster.gke_cluster.master_auth.0.client_certificate_config}"
+}
+
+
+
+variables.tf: For parameterizing the cluster configurations.
+
+variable "project_id" {
+  description = "GCP Project ID"
+}
+
+variable "region" {
+  description = "GCP Region for resources"
+  default     = "us-central1"
+}
+
+variable "cluster_name" {
+  description = "Name of the GKE cluster"
+  default     = "gke-cluster"
+}
+
+variable "machine_type" {
+  description = "Type of VM instances in the node pool"
+  default     = "e2-medium"
+}
+
+variable "disk_size" {
+  description = "Disk size in GB for nodes"
+  default     = 100
+}
+
+variable "initial_node_count" {
+  description = "Initial number of nodes in the cluster"
+  default     = 3
+}
+
+variable "node_pool_count" {
+  description = "Number of nodes in the node pool"
+  default     = 3
+}
+
+
+
+
+outputs.tf: To output important details like the cluster name and endpoint.
+
+output "cluster_name" {
+  description = "Name of the GKE cluster"
+  value       = google_container_cluster.gke_cluster.name
+}
+
+output "cluster_endpoint" {
+  description = "Endpoint of the GKE cluster"
+  value       = google_container_cluster.gke_cluster.endpoint
+}
+
+output "logs_bucket_name" {
+  description = "Name of the Cloud Storage bucket for logs"
+  value       = google_storage_bucket.logs_bucket.name
+}
+
+
+Steps to Deploy:
+
+terraform init
+terraform plan -var="project_id=<your-project-id>"
+terraform apply -var="project_id=<your-project-id>"
+
+
+
+
+
+
+Containerization - Dockerfile
+
+Write a Dockerfile for the static web application:
+
+# Dockerfile
+FROM nginx:alpine
+COPY ./static-site /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+
+
+Build the image and push it to a container registry (GCP Container Registry or Artifact Registry).
+
+
+Kubernetes Deployment Files
+
+Deployment: Manages the pods running your application.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: static-web-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: static-web-app
+  template:
+    metadata:
+      labels:
+        app: static-web-app
+    spec:
+      containers:
+      - name: static-web-app
+        image: gcr.io/<project-id>/static-web-app:latest
+        ports:
+        - containerPort: 80
+
+
+
+Service: Exposes the application (NodePort or LoadBalancer).
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: static-web-app-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: static-web-app
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+
+
+Monitoring Setup (Prometheus)
+
+Install Prometheus on the GKE cluster using Helm.
+
+Use helm repo add prometheus-community https://prometheus-community.github.io/helm-charts to add the Prometheus chart.
+
+Deploy the chart with helm install prometheus prometheus-community/prometheus.
+
+Expose Prometheus using a Service to monitor the cluster.
+
